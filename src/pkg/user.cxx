@@ -207,6 +207,7 @@ void UserClient::DoLoginOrRegister(std::string input) {
   
   // Tells server our ID and intent
   UserToServer_IDPrompt_Message id_prompt_msg;
+  this->id = this->user_config.user_username;
   id_prompt_msg.id = this->id;
   if (input == "register") {
     id_prompt_msg.new_user = true;
