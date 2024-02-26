@@ -123,6 +123,7 @@ bool ServerClient::HandleConnection(
     auto key_pair = HandleKeyExchange(network_driver, crypto_driver);
     auto id_prompt_msg_data = network_driver->read();
     auto [decrypted_msg_data, decrypted] = crypto_driver->decrypt_and_verify(key_pair.first, key_pair.second, id_prompt_msg_data);
+    this->cli_driver->print_warning("handled key exchange");
     if (!decrypted) {
         network_driver->disconnect();
         throw std::runtime_error("User to server ID prompt message could not be decrypted");
@@ -195,6 +196,7 @@ void ServerClient::HandleLogin(
   UserToServer_HashedAndSaltedPassword_Message hash_and_salted_pwd_msg;
   auto received_data = network_driver->read();
   auto [decrypted_hspw_data, hspw_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, received_data);
+  this->cli_driver->print_warning("right here");
   if (!hspw_decrypted) {
     network_driver->disconnect();
     throw std::runtime_error("User to server hashed and salted password message could not be decrypted");
@@ -211,6 +213,7 @@ void ServerClient::HandleLogin(
       break;
     }
   }
+  this->cli_driver->print_warning("3");
   if (!found_pepper) {
     network_driver->disconnect();
     throw std::runtime_error("A matching pepper was not found");
@@ -232,6 +235,7 @@ void ServerClient::HandleLogin(
     }
     current_time -= i;
     }
+    this->cli_driver->print_warning("4");
     if (!in_time) {
       network_driver->disconnect();
       throw std::runtime_error("Response was not sent in time");
@@ -240,6 +244,7 @@ void ServerClient::HandleLogin(
   UserToServer_VerificationKey_Message vk_msg;
   auto vk_msg_data = network_driver->read();
   auto [decrypted_data, vk_msg_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, vk_msg_data);
+  this->cli_driver->print_warning("5");
   if (!vk_msg_decrypted) {
     network_driver->disconnect();
     throw std::runtime_error("Message could not be decrypted");
@@ -280,6 +285,7 @@ void ServerClient::HandleRegister(
     std::pair<CryptoPP::SecByteBlock, CryptoPP::SecByteBlock> keys) {
   // Confirm user is not in database
   UserRow user = this->db_driver->find_user(id);
+  this->cli_driver->print_warning("6");
   if (!(user.user_id == "")) { 
     throw std::runtime_error("User already exists");
   }
@@ -299,6 +305,7 @@ void ServerClient::HandleRegister(
   UserToServer_HashedAndSaltedPassword_Message hash_and_salted_pwd;
   auto hspw_data = network_driver->read();
   auto [decrypted_hspw_data, hspw_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, hspw_data);
+  this->cli_driver->print_warning("6");
   if (!hspw_decrypted) {
     network_driver->disconnect();
     throw std::runtime_error("Message could not be decrypted");
@@ -324,6 +331,7 @@ void ServerClient::HandleRegister(
   UserToServer_PRGValue_Message prg_msg;
   auto prg_msg_data = network_driver->read();
   auto [decrypted_prg_msg_data, prg_msg_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, prg_msg_data);
+  this->cli_driver->print_warning("7");
   if (!prg_msg_decrypted) {
     network_driver->disconnect();
     throw std::runtime_error("Message could not be decrypted");
@@ -339,6 +347,7 @@ void ServerClient::HandleRegister(
       break;
     }
   }
+  this->cli_driver->print_warning("8");
   if (!in_time) {
     network_driver->disconnect();
     throw std::runtime_error("Response was not generated in time");
@@ -347,6 +356,7 @@ void ServerClient::HandleRegister(
   UserToServer_VerificationKey_Message vk_msg;
   auto vk_msg_data = network_driver->read();
   auto [decrypted_vk_msg_data, vk_msg_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, vk_msg_data);
+  this->cli_driver->print_warning("9");
   if (!vk_msg_decrypted) {
     network_driver->disconnect();
     throw std::runtime_error("Message could not be decrypted");
