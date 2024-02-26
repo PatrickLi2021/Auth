@@ -84,11 +84,43 @@ void UserClient::run() {
  */
 std::pair<CryptoPP::SecByteBlock, CryptoPP::SecByteBlock>
 UserClient::HandleServerKeyExchange() {
-  // TODO: implement me!
+  // Generate key pair
+  auto [dh_obj, private_value, public_value] = this->crypto_driver->DH_initialize();
+  // Send public value to server
+  UserToServer_DHPublicValue_Message dh_public_msg;
+  dh_public_msg.public_value = public_value;
+  std::vector<unsigned char> data;
+  dh_public_msg.serialize(data);
+  this->network_driver->send(data);
+
+  // Receive a public value from server
+  ServerToUser_DHPublicValue_Message server_to_user_pub_msg;
+  auto pub_val_data = network_driver->read();
+  server_to_user_pub_msg.deserialize(pub_val_data);
+
+  // Verify its signature
+  bool verified = this->crypto_driver->RSA_verify(this->RSA_server_verification_key, concat_byteblocks(server_to_user_pub_msg.server_public_value, server_to_user_pub_msg.user_public_value), server_to_user_pub_msg.server_signature);
+  if (!verified) {
+    this->network_driver->disconnect();
+    throw std::runtime_error("Could not verify the signature");
+  }
+
+  // Verify that public value server received is g^a
+  if (!(server_to_user_pub_msg.server_public_value == public_value)) {
+    this->network_driver->disconnect();
+    throw std::runtime_error("Public values don't match");
+  }
+
+  // Generate DH shared key + AES and HMAC keys
+  CryptoPP::SecByteBlock shared_key = this->crypto_driver->DH_generate_shared_key(dh_obj, private_value, public_value);
+  CryptoPP::SecByteBlock aes_key = this->crypto_driver->AES_generate_key(shared_key);
+  CryptoPP::SecByteBlock hmac_key = this->crypto_driver->HMAC_generate_key(shared_key);
+
+  return std::make_pair(aes_key, hmac_key);
 }
 
 /**
- * Diffie-Hellman key exchange with another user. This function shuold:
+ * Diffie-Hellman key exchange with another user. This function should:
  * 1) Generate a keypair, a, g^a, signs it, and sends it to the other user.
  *    Use concat_byteblock_and_cert to sign the message.
  * 2) Receive a public value from the other user and verifies its signature and
@@ -99,7 +131,43 @@ UserClient::HandleServerKeyExchange() {
  */
 std::pair<CryptoPP::SecByteBlock, CryptoPP::SecByteBlock>
 UserClient::HandleUserKeyExchange() {
-  // TODO: implement me!
+  // Generate key pair
+  auto [dh_obj, private_value, public_value] = this->crypto_driver->DH_initialize();
+  auto message = concat_byteblock_and_cert(public_value, this->certificate);
+  std::string signature = this->crypto_driver->RSA_sign(this->RSA_signing_key, message);
+
+  // Send to other user
+  UserToUser_DHPublicValue_Message dh_pub_val_msg;
+  dh_pub_val_msg.public_value = public_value;
+  dh_pub_val_msg.certificate = this->certificate;
+  dh_pub_val_msg.user_signature = signature;
+
+  // Receive public value from other user
+  UserToUser_DHPublicValue_Message other_user_msg;
+  auto data = this->network_driver->read();
+  other_user_msg.deserialize(data);
+
+  // Verify the signature and certificate
+  bool user_signed = this->crypto_driver->RSA_verify(other_user_msg.certificate.verification_key, concat_byteblock_and_cert(other_user_msg.public_value, other_user_msg.certificate), other_user_msg.user_signature);
+  if (!user_signed) {
+    this->network_driver->disconnect();
+    throw std::runtime_error("verification failed");
+  }
+
+  bool user_vk_signed = this->crypto_driver->RSA_verify(this->RSA_server_verification_key, concat_string_and_rsakey(other_user_msg.certificate.id, other_user_msg.certificate.verification_key), other_user_msg.certificate.server_signature);
+  if (!user_vk_signed) {
+    this->network_driver->disconnect();
+    throw std::runtime_error("verification failed");
+  }
+
+  // Generate DH shared key + AES and HMAC keys
+  CryptoPP::SecByteBlock shared_key = this->crypto_driver->DH_generate_shared_key(dh_obj, private_value, public_value);
+  CryptoPP::SecByteBlock aes_key = this->crypto_driver->AES_generate_key(shared_key);
+  CryptoPP::SecByteBlock hmac_key = this->crypto_driver->HMAC_generate_key(shared_key);
+
+  this->RSA_remote_verification_key = other_user_msg.certificate.verification_key;
+
+  return std::make_pair(aes_key, hmac_key);
 }
 
 /**
@@ -134,7 +202,74 @@ void UserClient::HandleLoginOrRegister(std::string input) {
  * this->RSA_verification_key
  */
 void UserClient::DoLoginOrRegister(std::string input) {
-  // TODO: implement me!
+  // Handle key exchange with server
+  auto [aes_key, hmac_key] = HandleServerKeyExchange();
+  
+  // Tells server our ID and intent
+  UserToServer_IDPrompt_Message id_prompt_msg;
+  id_prompt_msg.id = this->id;
+  if (input == "register") {
+    id_prompt_msg.new_user = true;
+  } else {
+    id_prompt_msg.new_user = false;
+  }
+  std::vector<unsigned char> data;
+  // TODO: encrypt and tag
+  id_prompt_msg.serialize(data);
+  this->network_driver->send(data);
+
+  // Receives salt from server
+  ServerToUser_Salt_Message salt_msg;
+  auto salt_msg_data = network_driver->read();
+  salt_msg.deserialize(salt_msg_data);
+  // TODO: Decrypt and verify (we have to explicitly call deserialize on the resulting first element of decrypt_and_verify but we do NOT have to explicity call serialize after calling encrypt_and_tag)
+  
+  // Generates and sends a hashed and salted password
+  UserToServer_HashedAndSaltedPassword_Message hs_psw;
+  hs_psw.hspw = this->crypto_driver->hash(this->user_config.user_password + salt_msg.salt);
+  std::vector<unsigned char> hs_psw_data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &hs_psw);
+  this->network_driver->send(hs_psw_data);
+
+  // If registering, receive a PRG seed from server
+  ServerToUser_PRGSeed_Message prg_seed_msg;
+  auto prg_seed_msg_data = this->network_driver->read();
+  auto [decrypted_prg_seed_data, seed_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, prg_seed_msg_data);
+  if (!seed_decrypted) {
+    throw std::runtime_error("Could not decrypt data");
+  }
+  prg_seed_msg.deserialize(decrypted_prg_seed_data);
+  this->prg_seed = prg_seed_msg.seed;
+
+  // Generate and send a 2FA response
+  ServerToUser_PRGSeed_Message prg_2fa_seed_msg;
+  prg_seed_msg.seed = this->prg_seed;
+  std::vector<unsigned char> prg_seed_data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &prg_2fa_seed_msg);
+  this->network_driver->send(prg_seed_data);
+
+  // Generates a RSA keypair, and send vk to the server for signing.
+  auto [rsa_private_key, rsa_public_key] = this->crypto_driver->RSA_generate_keys();
+  this->RSA_signing_key = rsa_private_key;
+  UserToServer_VerificationKey_Message vk_msg;
+  vk_msg.verification_key = rsa_private_key;
+  std::vector<unsigned char> vk_msg_data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &vk_msg);
+  this->network_driver->send(vk_msg_data);
+
+  // Receives and save cert in this->certificate.
+  ServerToUser_IssuedCertificate_Message issued_cert_msg;
+  auto cert_msg_data = this->network_driver->read();
+  auto [decrypted_cert_msg_data, cert_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, cert_msg_data);
+  if (!cert_decrypted) {
+    throw std::runtime_error("Could not decrypt data");
+  }
+  issued_cert_msg.deserialize(decrypted_cert_msg_data);
+  this->certificate = issued_cert_msg.certificate;
+
+  // Receives and saves the keys, certificate, and prg seed
+  this->RSA_verification_key = issued_cert_msg.certificate.verification_key;
+  SaveRSAPrivateKey(this->user_config.user_signing_key_path, this->RSA_signing_key);
+  SaveRSAPublicKey(this->user_config.user_verification_key_path, this->RSA_verification_key);
+  SavePRGSeed(this->user_config.user_prg_seed_path, this->prg_seed);
+  SaveCertificate(this->user_config.user_certificate_path, this->certificate);
 }
 
 /**

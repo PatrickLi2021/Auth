@@ -12,7 +12,7 @@ struct UserRow {
   std::string prg_seed;
 };
 
-class DBDriver {
+class  DBDriver {
 public:
   DBDriver();
   int open(std::string dbpath);

@@ -88,7 +88,12 @@ std::tuple<DH, SecByteBlock, SecByteBlock> CryptoDriver::DH_initialize() {
 SecByteBlock CryptoDriver::DH_generate_shared_key(
     const DH &DH_obj, const SecByteBlock &DH_private_value,
     const SecByteBlock &DH_other_public_value) {
-  // TODO: implement me!
+      SecByteBlock shared_secret(DH_obj.AgreedValueLength());
+      if (!DH_obj.Agree(shared_secret, DH_private_value, DH_other_public_value)) {
+        throw std::runtime_error("Failed to agree");
+      } else {
+        return shared_secret;
+      }
 }
 
 /**
@@ -98,7 +103,10 @@ SecByteBlock CryptoDriver::AES_generate_key(const SecByteBlock &DH_shared_key) {
   std::string aes_salt_str("salt0000");
   SecByteBlock aes_salt((const unsigned char *)(aes_salt_str.data()),
                         aes_salt_str.size());
-  // TODO: implement me!
+  SecByteBlock aes_key(AES::DEFAULT_KEYLENGTH);
+  HKDF<SHA256> hkdf;
+  hkdf.DeriveKey(aes_key, AES::DEFAULT_KEYLENGTH, DH_shared_key, DH_shared_key.size(), aes_salt, aes_salt.size(), NULL, 0);
+  return aes_key;
 }
 
 /**
@@ -107,7 +115,14 @@ SecByteBlock CryptoDriver::AES_generate_key(const SecByteBlock &DH_shared_key) {
 std::pair<std::string, SecByteBlock>
 CryptoDriver::AES_encrypt(SecByteBlock key, std::string plaintext) {
   try {
-    // TODO: implement me!
+    std::string cipherText;
+    CBC_Mode<AES>::Encryption enc;
+    SecByteBlock iv(AES::BLOCKSIZE);
+    CryptoPP::AutoSeededRandomPool prng;
+    enc.GetNextIV(prng, iv);
+    enc.SetKeyWithIV(key, key.size(), iv);
+    CryptoPP::StringSource ss(plaintext, true, new CryptoPP::StreamTransformationFilter(enc, new CryptoPP::StringSink(cipherText)));
+    return std::make_pair(cipherText, iv);
   } catch (CryptoPP::Exception &e) {
     std::cerr << e.what() << std::endl;
     std::cerr << "This function was likely called with an incorrect shared key."
@@ -122,7 +137,11 @@ CryptoDriver::AES_encrypt(SecByteBlock key, std::string plaintext) {
 std::string CryptoDriver::AES_decrypt(SecByteBlock key, SecByteBlock iv,
                                       std::string ciphertext) {
   try {
-    // TODO: implement me!
+    CBC_Mode<AES>::Decryption dec;
+    std::string plaintext;
+    dec.SetKeyWithIV(key, key.size(), iv);
+    CryptoPP::StringSource ss(ciphertext, true, new CryptoPP::StreamTransformationFilter(dec, new CryptoPP::StringSink(plaintext)));
+    return plaintext;
   } catch (CryptoPP::Exception &e) {
     std::cerr << e.what() << std::endl;
     std::cerr << "This function was likely called with an incorrect shared key."
@@ -139,7 +158,10 @@ CryptoDriver::HMAC_generate_key(const SecByteBlock &DH_shared_key) {
   std::string hmac_salt_str("salt0001");
   SecByteBlock hmac_salt((const unsigned char *)(hmac_salt_str.data()),
                          hmac_salt_str.size());
-  // TODO: implement me!
+  SecByteBlock hmac_key(SHA256::BLOCKSIZE);
+  HKDF<SHA256> hkdf;
+  hkdf.DeriveKey(hmac_key, hmac_key.size(), DH_shared_key, DH_shared_key.size(), hmac_salt, hmac_salt.size(), NULL, 0);
+  return hmac_key;
 }
 
 /**
@@ -148,7 +170,14 @@ CryptoDriver::HMAC_generate_key(const SecByteBlock &DH_shared_key) {
 std::string CryptoDriver::HMAC_generate(SecByteBlock key,
                                         std::string ciphertext) {
   try {
-    // TODO: implement me!
+    std::string mac;
+    HMAC<SHA256> hmac(key, key.size());
+    CryptoPP::StringSource ss2(ciphertext, true, 
+        new HashFilter(hmac,
+            new StringSink(mac)
+        ) // HashFilter      
+    ); // StringSource
+    return mac;
   } catch (const CryptoPP::Exception &e) {
     std::cerr << e.what() << std::endl;
     throw std::runtime_error("CryptoDriver HMAC generation failed.");
@@ -163,7 +192,11 @@ bool CryptoDriver::HMAC_verify(SecByteBlock key, std::string ciphertext,
   const int flags = HashVerificationFilter::THROW_EXCEPTION |
                     HashVerificationFilter::HASH_AT_END;
   try {
-    // TODO: implement me!
+      HMAC<SHA256> hmac(key, key.size());
+      StringSource ss(ciphertext + mac, true, 
+        new HashVerificationFilter(hmac, NULL, flags)
+      ); // StringSource
+      return true;
   } catch (const CryptoPP::Exception &e) {
     std::cerr << e.what() << std::endl;
     return false;
@@ -179,7 +212,16 @@ bool CryptoDriver::HMAC_verify(SecByteBlock key, std::string ciphertext,
  * @return tuple of RSA private key and public key
  */
 std::pair<RSA::PrivateKey, RSA::PublicKey> CryptoDriver::RSA_generate_keys() {
-  // TODO: implement me!
+  CryptoPP::AutoSeededRandomPool prng;
+  RSA::PrivateKey private_key;
+  private_key.GenerateRandomWithKeySize(prng, RSA_KEYSIZE);
+  RSA::PublicKey public_key(private_key);
+  
+  if (!private_key.Validate(prng, 3)) {
+    throw std::runtime_error("Private key validation failed");
+  } else {
+    return std::make_pair(private_key, public_key);
+  }
 }
 
 /**
@@ -194,7 +236,16 @@ std::pair<RSA::PrivateKey, RSA::PublicKey> CryptoDriver::RSA_generate_keys() {
  */
 std::string CryptoDriver::RSA_sign(const RSA::PrivateKey &signing_key,
                                    std::vector<unsigned char> message) {
-  // TODO: implement me!
+  CryptoPP::AutoSeededRandomPool rng;
+  RSASS<PSS, SHA256>::Signer signer(signing_key);
+  auto message_str = chvec2str(message);
+  std::string signature;
+  CryptoPP::StringSource ss1(message_str, true, 
+    new SignerFilter(rng, signer,
+        new StringSink(signature)
+    ) 
+  ); 
+  return signature;
 }
 
 /**
@@ -202,7 +253,7 @@ std::string CryptoDriver::RSA_sign(const RSA::PrivateKey &signing_key,
  * should:
  * 1) Initialize a RSA::Verifier with the given key using RSASS<PSS,
  * SHA256>::Verifier.
- * 2) Convert the message to a string using chvev2str, and
+ * 2) Convert the message to a string using chvec2str, and
  * concat the signature.
  * 3) Use a SignatureVerificationFilter to verify the
  * signature with the given flags.
@@ -215,7 +266,20 @@ bool CryptoDriver::RSA_verify(const RSA::PublicKey &verification_key,
                               std::string signature) {
   const int flags = SignatureVerificationFilter::PUT_RESULT |
                     SignatureVerificationFilter::SIGNATURE_AT_END;
-  // TODO: implement me!
+  RSASS<PSS, SHA256>::Verifier verifier(verification_key);
+  auto message_str = chvec2str(message);
+  std::string recovered;
+  byte result = false;
+
+  StringSource ss(message_str + signature, true,
+    new SignatureVerificationFilter(
+        verifier,
+        new ArraySink(
+            &result, sizeof(result)),
+            flags
+    )
+  );
+  return result;
 }
 
 /**
