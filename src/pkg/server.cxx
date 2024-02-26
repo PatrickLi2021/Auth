@@ -236,31 +236,31 @@ void ServerClient::HandleLogin(
       network_driver->disconnect();
       throw std::runtime_error("Response was not sent in time");
     }
-    // Receive user's verification key
-    UserToServer_VerificationKey_Message vk_msg;
-    auto vk_msg_data = network_driver->read();
-    auto [decrypted_data, vk_msg_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, vk_msg_data);
-    if (!vk_msg_decrypted) {
-      network_driver->disconnect();
-      throw std::runtime_error("Message could not be decrypted");
-    }
-    vk_msg.deserialize(decrypted_data);
-    
-    // Sign and create certificate
-    auto [private_key, public_key] = crypto_driver->RSA_generate_keys();
-    std::string server_sig = crypto_driver->RSA_sign(private_key, concat_string_and_rsakey(user.user_id, vk_msg.verification_key));
-
-    // Send certificate back to user
-    ServerToUser_IssuedCertificate_Message issued_cert_msg;
-    Certificate_Message certificate;
-    certificate.id = user.user_id;
-    certificate.verification_key = vk_msg.verification_key;
-    certificate.server_signature = server_sig;
-    std::vector<unsigned char> cert_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &issued_cert_msg);
-    issued_cert_msg.certificate = certificate;
-    network_driver->send(cert_data);
-    this->cli_driver->print_warning("Sent certificate back");
+  // Receive user's verification key
+  UserToServer_VerificationKey_Message vk_msg;
+  auto vk_msg_data = network_driver->read();
+  auto [decrypted_data, vk_msg_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, vk_msg_data);
+  if (!vk_msg_decrypted) {
+    network_driver->disconnect();
+    throw std::runtime_error("Message could not be decrypted");
   }
+  vk_msg.deserialize(decrypted_data);
+  
+  // Sign and create certificate
+  auto [private_key, public_key] = crypto_driver->RSA_generate_keys();
+  std::string server_sig = crypto_driver->RSA_sign(private_key, concat_string_and_rsakey(user.user_id, vk_msg.verification_key));
+
+  // Send certificate back to user
+  ServerToUser_IssuedCertificate_Message issued_cert_msg;
+  Certificate_Message certificate;
+  certificate.id = user.user_id;
+  certificate.verification_key = vk_msg.verification_key;
+  certificate.server_signature = server_sig;
+  std::vector<unsigned char> cert_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &issued_cert_msg);
+  issued_cert_msg.certificate = certificate;
+  network_driver->send(cert_data);
+  this->cli_driver->print_warning("Sent certificate back");
+}
 
 /**
  * Register the given user. This function should:
@@ -293,22 +293,24 @@ void ServerClient::HandleRegister(
   salt_msg.salt = byteblock_to_string(salt);
   std::vector<unsigned char> send_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &salt_msg);
   network_driver->send(send_data);
-
+  this->cli_driver->print_warning("Generated and sent salt");
+  
   // Receive hash of salted password
   UserToServer_HashedAndSaltedPassword_Message hash_and_salted_pwd;
-  auto data = network_driver->read();
-  auto [decrypted_data, decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, data);
-  if (!decrypted) {
+  auto hspw_data = network_driver->read();
+  auto [decrypted_hspw_data, hspw_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, hspw_data);
+  if (!hspw_decrypted) {
     network_driver->disconnect();
     throw std::runtime_error("Message could not be decrypted");
   }
-  hash_and_salted_pwd.deserialize(data);
+  hash_and_salted_pwd.deserialize(hspw_data);
   new_user.password_salt = hash_and_salted_pwd.hspw;
 
   // Generate pepper and stored second hash
   CryptoPP::SecByteBlock pepper = crypto_driver->png(PEPPER_SIZE);
   std::string hash_response = crypto_driver->hash(hash_and_salted_pwd.hspw + byteblock_to_string(pepper));
   new_user.password_hash = hash_response;
+  this->cli_driver->print_warning("Generate pepper and stored second hash");
 
   // Generates and sends PRG seed to user
   ServerToUser_PRGSeed_Message prg_seed_msg;
@@ -316,6 +318,7 @@ void ServerClient::HandleRegister(
   prg_seed_msg.seed = user_seed;
   std::vector<unsigned char> prg_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &prg_seed_msg);
   network_driver->send(prg_data);
+  this->cli_driver->print_warning("Generated and send PRG seed to user");
   
   // Receive 2FA response
   UserToServer_PRGValue_Message prg_msg;
@@ -326,6 +329,7 @@ void ServerClient::HandleRegister(
     throw std::runtime_error("Message could not be decrypted");
   }
   prg_msg.deserialize(decrypted_prg_msg_data);
+  this->cli_driver->print_warning("Receive 2FA response");
 
   // Check to see if it was generated in the last 60 seconds
   bool in_time = false;
@@ -335,32 +339,37 @@ void ServerClient::HandleRegister(
       break;
     }
   }
-  if (in_time) {
-    // Receive user's verification key
-    UserToServer_VerificationKey_Message vk_msg;
-    auto data = network_driver->read();
-    auto [decrypted_data, decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, data);
-    if (!decrypted) {
-      network_driver->disconnect();
-      throw std::runtime_error("Message could not be decrypted");
-    }
-    vk_msg.deserialize(data);
-    
-    // Sign and create certificate
-    auto [private_key, public_key] = crypto_driver->RSA_generate_keys();
-    std::string server_sig = crypto_driver->RSA_sign(private_key, concat_string_and_rsakey(new_user.user_id, vk_msg.verification_key));
-
-    // Send certificate back to user
-    ServerToUser_IssuedCertificate_Message issued_cert_msg;
-    Certificate_Message certificate;
-    certificate.id = new_user.user_id;
-    certificate.verification_key = vk_msg.verification_key;
-    certificate.server_signature = server_sig;
-    std::vector<unsigned char> cert_msg_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &issued_cert_msg);
-    issued_cert_msg.certificate = certificate;
-    network_driver->send(cert_msg_data);
-    
-    this->db_driver->insert_user(new_user);
+  if (!in_time) {
+    network_driver->disconnect();
+    throw std::runtime_error("Response was not generated in time");
   }
+  // Receive user's verification key
+  UserToServer_VerificationKey_Message vk_msg;
+  auto vk_msg_data = network_driver->read();
+  auto [decrypted_vk_msg_data, vk_msg_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, vk_msg_data);
+  if (!vk_msg_decrypted) {
+    network_driver->disconnect();
+    throw std::runtime_error("Message could not be decrypted");
+  }
+  vk_msg.deserialize(vk_msg_data);
+  this->cli_driver->print_warning("Receive user's verification key");
+  
+  // Sign and create certificate
+  auto [private_key, public_key] = crypto_driver->RSA_generate_keys();
+  std::string server_sig = crypto_driver->RSA_sign(private_key, concat_string_and_rsakey(new_user.user_id, vk_msg.verification_key));
+  this->cli_driver->print_warning("Signed and created certificate");
+
+  // Send certificate back to user
+  ServerToUser_IssuedCertificate_Message issued_cert_msg;
+  Certificate_Message certificate;
+  certificate.id = new_user.user_id;
+  certificate.verification_key = vk_msg.verification_key;
+  certificate.server_signature = server_sig;
+  std::vector<unsigned char> cert_msg_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &issued_cert_msg);
+  issued_cert_msg.certificate = certificate;
+  network_driver->send(cert_msg_data);
+  this->cli_driver->print_warning("Sent certificate back to user");  
+  
+  this->db_driver->insert_user(new_user);
   network_driver->disconnect();
 }
