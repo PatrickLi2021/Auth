@@ -287,6 +287,7 @@ void ServerClient::HandleRegister(
   UserRow user = this->db_driver->find_user(id);
   this->cli_driver->print_warning("6");
   if (!(user.user_id == "")) { 
+    network_driver->disconnect();
     throw std::runtime_error("User already exists");
   }
   // Create a new user
