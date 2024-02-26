@@ -100,12 +100,14 @@ UserClient::HandleServerKeyExchange() {
 
   // Verify its signature
   bool verified = this->crypto_driver->RSA_verify(this->RSA_server_verification_key, concat_byteblocks(server_to_user_pub_msg.server_public_value, server_to_user_pub_msg.user_public_value), server_to_user_pub_msg.server_signature);
+  this->cli_driver->print_warning("user 1");
   if (!verified) {
     this->network_driver->disconnect();
     throw std::runtime_error("Could not verify the signature");
   }
 
   // Verify that public value server received is g^a
+  this->cli_driver->print_warning("user 2");
   if (!(server_to_user_pub_msg.server_public_value == public_value)) {
     this->network_driver->disconnect();
     throw std::runtime_error("Public values don't match");
@@ -149,12 +151,14 @@ UserClient::HandleUserKeyExchange() {
 
   // Verify the signature and certificate
   bool user_signed = this->crypto_driver->RSA_verify(other_user_msg.certificate.verification_key, concat_byteblock_and_cert(other_user_msg.public_value, other_user_msg.certificate), other_user_msg.user_signature);
+  this->cli_driver->print_warning("user 4");
   if (!user_signed) {
     this->network_driver->disconnect();
     throw std::runtime_error("verification failed");
   }
 
   bool user_vk_signed = this->crypto_driver->RSA_verify(this->RSA_server_verification_key, concat_string_and_rsakey(other_user_msg.certificate.id, other_user_msg.certificate.verification_key), other_user_msg.certificate.server_signature);
+  this->cli_driver->print_warning("user 5");
   if (!user_vk_signed) {
     this->network_driver->disconnect();
     throw std::runtime_error("verification failed");
@@ -235,6 +239,7 @@ void UserClient::DoLoginOrRegister(std::string input) {
   ServerToUser_PRGSeed_Message prg_seed_msg;
   auto prg_seed_msg_data = this->network_driver->read();
   auto [decrypted_prg_seed_data, seed_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, prg_seed_msg_data);
+  this->cli_driver->print_warning("user 6");
   if (!seed_decrypted) {
     throw std::runtime_error("Could not decrypt data");
   }
@@ -259,6 +264,7 @@ void UserClient::DoLoginOrRegister(std::string input) {
   ServerToUser_IssuedCertificate_Message issued_cert_msg;
   auto cert_msg_data = this->network_driver->read();
   auto [decrypted_cert_msg_data, cert_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, cert_msg_data);
+  this->cli_driver->print_warning("3");
   if (!cert_decrypted) {
     throw std::runtime_error("Could not decrypt data");
   }
