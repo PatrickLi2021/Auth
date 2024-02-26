@@ -272,15 +272,13 @@ void ServerClient::HandleRegister(
   // Create a new user
   UserRow new_user;
   new_user.user_id = id;
-
+  
   // Generate and send salt
   CryptoPP::SecByteBlock salt = crypto_driver->png(SALT_SIZE);
   ServerToUser_Salt_Message salt_msg;
   salt_msg.salt = byteblock_to_string(salt);
-  std::vector<unsigned char> send_data;
-  salt_msg.serialize(send_data);
+  std::vector<unsigned char> send_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, salt_msg);
   network_driver->send(send_data);
-  // TODO: ENCRYPT_AND_TAG
 
   // Receive hash of salted password
   UserToServer_HashedAndSaltedPassword_Message hash_and_salted_pwd;
@@ -302,9 +300,7 @@ void ServerClient::HandleRegister(
   ServerToUser_PRGSeed_Message prg_seed_msg;
   CryptoPP::SecByteBlock user_seed = crypto_driver->png(PRG_SIZE);
   prg_seed_msg.seed = user_seed;
-  std::vector<unsigned char> prg_data;
-  prg_seed_msg.serialize(prg_data);
-  // TODO: ENCRYPT_AND_TAG
+  std::vector<unsigned char> prg_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, prg_seed_msg);
   network_driver->send(prg_data);
   
   // Receive 2FA response
@@ -346,11 +342,10 @@ void ServerClient::HandleRegister(
     certificate.id = new_user.user_id;
     certificate.verification_key = vk_msg.verification_key;
     certificate.server_signature = server_sig;
-    std::vector<unsigned char> cert_msg_data;
+    std::vector<unsigned char> cert_msg_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, issued_cert_msg);
     issued_cert_msg.certificate = certificate;
-    issued_cert_msg.serialize(cert_msg_data);
     network_driver->send(cert_msg_data);
-    // TODO: ENCRYPT_AND_TAG
+    
     this->db_driver->insert_user(new_user);
   }
   network_driver->disconnect();
