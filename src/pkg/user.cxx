@@ -84,39 +84,48 @@ void UserClient::run() {
  */
 std::pair<CryptoPP::SecByteBlock, CryptoPP::SecByteBlock>
 UserClient::HandleServerKeyExchange() {
+  this->cli_driver->print_left("in handlserverkeyexchange");
   // Generate key pair
   auto [dh_obj, private_value, public_value] = this->crypto_driver->DH_initialize();
+  this->cli_driver->print_left("initialized keypair");
   // Send public value to server
   UserToServer_DHPublicValue_Message dh_public_msg;
   dh_public_msg.public_value = public_value;
   std::vector<unsigned char> data;
   dh_public_msg.serialize(data);
   this->network_driver->send(data);
+  this->cli_driver->print_left("sent message");
 
   // Receive a public value from server
+  this->cli_driver->print_left("received public value from server");
   ServerToUser_DHPublicValue_Message server_to_user_pub_msg;
   auto pub_val_data = network_driver->read();
   server_to_user_pub_msg.deserialize(pub_val_data);
-
+  this->cli_driver->print_left("deserialized public value from server");
+  
   // Verify its signature
+  this->cli_driver->print_left("verify signature begin");
   bool verified = this->crypto_driver->RSA_verify(this->RSA_server_verification_key, concat_byteblocks(server_to_user_pub_msg.server_public_value, server_to_user_pub_msg.user_public_value), server_to_user_pub_msg.server_signature);
-  this->cli_driver->print_warning("user 1");
   if (!verified) {
     this->network_driver->disconnect();
     throw std::runtime_error("Could not verify the signature");
   }
+  this->cli_driver->print_left("verify signature end");
 
   // Verify that public value server received is g^a
-  this->cli_driver->print_warning("user 2");
+  this->cli_driver->print_left("verify public value is g^a begin");
   if (!(server_to_user_pub_msg.server_public_value == public_value)) {
     this->network_driver->disconnect();
     throw std::runtime_error("Public values don't match");
   }
+  this->cli_driver->print_left("verify public value is g^a end");
 
   // Generate DH shared key + AES and HMAC keys
+  this->cli_driver->print_left("generated keys begin");
   CryptoPP::SecByteBlock shared_key = this->crypto_driver->DH_generate_shared_key(dh_obj, private_value, public_value);
   CryptoPP::SecByteBlock aes_key = this->crypto_driver->AES_generate_key(shared_key);
   CryptoPP::SecByteBlock hmac_key = this->crypto_driver->HMAC_generate_key(shared_key);
+  this->cli_driver->print_left("generated keys end");
 
   return std::make_pair(aes_key, hmac_key);
 }
@@ -137,28 +146,31 @@ UserClient::HandleUserKeyExchange() {
   auto [dh_obj, private_value, public_value] = this->crypto_driver->DH_initialize();
   auto message = concat_byteblock_and_cert(public_value, this->certificate);
   std::string signature = this->crypto_driver->RSA_sign(this->RSA_signing_key, message);
+  this->cli_driver->print_left("generated key pair here");
 
   // Send to other user
   UserToUser_DHPublicValue_Message dh_pub_val_msg;
   dh_pub_val_msg.public_value = public_value;
   dh_pub_val_msg.certificate = this->certificate;
   dh_pub_val_msg.user_signature = signature;
+  this->cli_driver->print_left("sent keypair to other user");
 
   // Receive public value from other user
   UserToUser_DHPublicValue_Message other_user_msg;
   auto data = this->network_driver->read();
   other_user_msg.deserialize(data);
+  this->cli_driver->print_left("received public value from other user");
 
   // Verify the signature and certificate
   bool user_signed = this->crypto_driver->RSA_verify(other_user_msg.certificate.verification_key, concat_byteblock_and_cert(other_user_msg.public_value, other_user_msg.certificate), other_user_msg.user_signature);
-  this->cli_driver->print_warning("user 4");
+  this->cli_driver->print_left("user 4");
   if (!user_signed) {
     this->network_driver->disconnect();
     throw std::runtime_error("verification failed");
   }
 
   bool user_vk_signed = this->crypto_driver->RSA_verify(this->RSA_server_verification_key, concat_string_and_rsakey(other_user_msg.certificate.id, other_user_msg.certificate.verification_key), other_user_msg.certificate.server_signature);
-  this->cli_driver->print_warning("user 5");
+  this->cli_driver->print_left("user 5");
   if (!user_vk_signed) {
     this->network_driver->disconnect();
     throw std::runtime_error("verification failed");
@@ -207,9 +219,11 @@ void UserClient::HandleLoginOrRegister(std::string input) {
  */
 void UserClient::DoLoginOrRegister(std::string input) {
   // Handle key exchange with server
+  this->cli_driver->print_left("In doLoginOrRegister");
   auto [aes_key, hmac_key] = HandleServerKeyExchange();
   
   // Tells server our ID and intent
+  this->cli_driver->print_left("tell server id begin");
   UserToServer_IDPrompt_Message id_prompt_msg;
   this->id = this->user_config.user_username;
   id_prompt_msg.id = this->id;
@@ -218,24 +232,33 @@ void UserClient::DoLoginOrRegister(std::string input) {
   } else {
     id_prompt_msg.new_user = false;
   }
-  std::vector<unsigned char> data;
-  // TODO: encrypt and tag
-  id_prompt_msg.serialize(data);
+  std::vector<unsigned char> data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &id_prompt_msg);
   this->network_driver->send(data);
+  this->cli_driver->print_left("tell server id end");
 
   // Receives salt from server
+  this->cli_driver->print_left("receive salt from server begin");
   ServerToUser_Salt_Message salt_msg;
   auto salt_msg_data = network_driver->read();
   salt_msg.deserialize(salt_msg_data);
   // TODO: Decrypt and verify (we have to explicitly call deserialize on the resulting first element of decrypt_and_verify but we do NOT have to explicity call serialize after calling encrypt_and_tag)
-  
+  auto [decrypted_salt_msg_data, salt_msg_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, salt_msg_data);
+  if (!salt_msg_decrypted) {
+    throw std::runtime_error("Could not decrypt data");
+  }
+  salt_msg.deserialize(decrypted_salt_msg_data);
+  this->cli_driver->print_left("receive salt from server end");
+
   // Generates and sends a hashed and salted password
+  this->cli_driver->print_left("generated and send hspw begin");
   UserToServer_HashedAndSaltedPassword_Message hs_psw;
   hs_psw.hspw = this->crypto_driver->hash(this->user_config.user_password + salt_msg.salt);
   std::vector<unsigned char> hs_psw_data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &hs_psw);
   this->network_driver->send(hs_psw_data);
+  this->cli_driver->print_left("generated and send hspw end");
 
   // If registering, receive a PRG seed from server
+  this->cli_driver->print_left("receive prg seed from server begin");
   ServerToUser_PRGSeed_Message prg_seed_msg;
   auto prg_seed_msg_data = this->network_driver->read();
   auto [decrypted_prg_seed_data, seed_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, prg_seed_msg_data);
@@ -245,22 +268,28 @@ void UserClient::DoLoginOrRegister(std::string input) {
   }
   prg_seed_msg.deserialize(decrypted_prg_seed_data);
   this->prg_seed = prg_seed_msg.seed;
+  this->cli_driver->print_left("receive prg seed from server end");
 
   // Generate and send a 2FA response
+  this->cli_driver->print_left("generated and send 2fa response begin");
   ServerToUser_PRGSeed_Message prg_2fa_seed_msg;
   prg_seed_msg.seed = this->prg_seed;
   std::vector<unsigned char> prg_seed_data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &prg_2fa_seed_msg);
   this->network_driver->send(prg_seed_data);
+  this->cli_driver->print_left("generate and send 2fa response end");
 
   // Generates a RSA keypair, and send vk to the server for signing.
+  this->cli_driver->print_left("generate rsa pair begin");
   auto [rsa_private_key, rsa_public_key] = this->crypto_driver->RSA_generate_keys();
   this->RSA_signing_key = rsa_private_key;
   UserToServer_VerificationKey_Message vk_msg;
   vk_msg.verification_key = rsa_private_key;
   std::vector<unsigned char> vk_msg_data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &vk_msg);
   this->network_driver->send(vk_msg_data);
+  this->cli_driver->print_left("generate rsa pair end");
 
   // Receives and save cert in this->certificate.
+  this->cli_driver->print_left("receive and save cert begin");
   ServerToUser_IssuedCertificate_Message issued_cert_msg;
   auto cert_msg_data = this->network_driver->read();
   auto [decrypted_cert_msg_data, cert_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, cert_msg_data);
@@ -270,13 +299,16 @@ void UserClient::DoLoginOrRegister(std::string input) {
   }
   issued_cert_msg.deserialize(decrypted_cert_msg_data);
   this->certificate = issued_cert_msg.certificate;
+  this->cli_driver->print_left("receive and save cert end");
 
   // Receives and saves the keys, certificate, and prg seed
+  this->cli_driver->print_left("receive and save keys, cert, seed begin");
   this->RSA_verification_key = issued_cert_msg.certificate.verification_key;
   SaveRSAPrivateKey(this->user_config.user_signing_key_path, this->RSA_signing_key);
   SaveRSAPublicKey(this->user_config.user_verification_key_path, this->RSA_verification_key);
   SavePRGSeed(this->user_config.user_prg_seed_path, this->prg_seed);
   SaveCertificate(this->user_config.user_certificate_path, this->certificate);
+  this->cli_driver->print_left("receive and save keys, cert, seed end");
 }
 
 /**
