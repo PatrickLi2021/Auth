@@ -114,7 +114,7 @@ UserClient::HandleServerKeyExchange() {
 
   // Verify that public value server received is g^a
   this->cli_driver->print_left("verify public value is g^a begin");
-  if (!(server_to_user_pub_msg.server_public_value == public_value)) {
+  if (!(server_to_user_pub_msg.user_public_value == public_value)) {
     this->network_driver->disconnect();
     throw std::runtime_error("Public values don't match");
   }
@@ -240,8 +240,7 @@ void UserClient::DoLoginOrRegister(std::string input) {
   this->cli_driver->print_left("receive salt from server begin");
   ServerToUser_Salt_Message salt_msg;
   auto salt_msg_data = network_driver->read();
-  salt_msg.deserialize(salt_msg_data);
-  // TODO: Decrypt and verify (we have to explicitly call deserialize on the resulting first element of decrypt_and_verify but we do NOT have to explicity call serialize after calling encrypt_and_tag)
+  // Decrypt and verify (we have to explicitly call deserialize on the resulting first element of decrypt_and_verify but we do NOT have to explicity call serialize after calling encrypt_and_tag)
   auto [decrypted_salt_msg_data, salt_msg_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, salt_msg_data);
   if (!salt_msg_decrypted) {
     throw std::runtime_error("Could not decrypt data");
@@ -258,6 +257,7 @@ void UserClient::DoLoginOrRegister(std::string input) {
   this->cli_driver->print_left("generated and send hspw end");
 
   // If registering, receive a PRG seed from server
+  // ony do if registering
   this->cli_driver->print_left("receive prg seed from server begin");
   ServerToUser_PRGSeed_Message prg_seed_msg;
   auto prg_seed_msg_data = this->network_driver->read();

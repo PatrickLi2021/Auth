@@ -168,11 +168,15 @@ ServerClient::HandleKeyExchange(std::shared_ptr<NetworkDriver> network_driver,
   msg.deserialize(msg_data);
   
   ServerToUser_DHPublicValue_Message dh_pub_val_msg;
+  dh_pub_val_msg.user_public_value = msg.public_value;
+  auto [dh_obj, public_value, private_value] = crypto_driver->DH_initialize();
+  dh_pub_val_msg.server_public_value = public_value;
+  std::string signature = crypto_driver->RSA_sign(this->RSA_signing_key, concat_byteblocks(dh_pub_val_msg.server_public_value, dh_pub_val_msg.user_public_value));
+  dh_pub_val_msg.server_signature = signature;
   std::vector<unsigned char> dh_pub_val_msg_data;
   dh_pub_val_msg.serialize(dh_pub_val_msg_data);
   network_driver->send(dh_pub_val_msg_data);
 
-  auto [dh_obj, public_value, private_value] = crypto_driver->DH_initialize();
   auto shared_key = crypto_driver->DH_generate_shared_key(dh_obj, public_value, private_value);
   auto aes_key = crypto_driver->AES_generate_key(shared_key);
   auto hmac_key = crypto_driver->HMAC_generate_key(shared_key);
@@ -312,6 +316,7 @@ void ServerClient::HandleRegister(
   std::vector<unsigned char> send_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &salt_msg);
   network_driver->send(send_data);
   this->cli_driver->print_left("Generated and sent salt");
+  new_user.password_salt = byteblock_to_string(salt);
   
   // Receive hash of salted password
   UserToServer_HashedAndSaltedPassword_Message hash_and_salted_pwd;
@@ -323,7 +328,6 @@ void ServerClient::HandleRegister(
     throw std::runtime_error("Message could not be decrypted");
   }
   hash_and_salted_pwd.deserialize(decrypted_hspw_data);
-  new_user.password_salt = hash_and_salted_pwd.hspw;
 
   // Generate pepper and stored second hash
   CryptoPP::SecByteBlock pepper = crypto_driver->png(PEPPER_SIZE);
@@ -337,6 +341,7 @@ void ServerClient::HandleRegister(
   prg_seed_msg.seed = user_seed;
   std::vector<unsigned char> prg_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &prg_seed_msg);
   network_driver->send(prg_data);
+  new_user.prg_seed = byteblock_to_string(user_seed);
   this->cli_driver->print_left("Generated and send PRG seed to user");
   
   // Receive 2FA response
