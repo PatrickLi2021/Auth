@@ -84,7 +84,7 @@ void UserClient::run() {
  */
 std::pair<CryptoPP::SecByteBlock, CryptoPP::SecByteBlock>
 UserClient::HandleServerKeyExchange() {
-  this->cli_driver->print_left("in handlserverkeyexchange");
+  this->cli_driver->print_left("in handleserverkeyexchange");
   // Generate key pair
   auto [dh_obj, private_value, public_value] = this->crypto_driver->DH_initialize();
   this->cli_driver->print_left("initialized keypair");
