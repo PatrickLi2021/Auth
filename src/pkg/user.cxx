@@ -122,7 +122,7 @@ UserClient::HandleServerKeyExchange() {
 
   // Generate DH shared key + AES and HMAC keys
   this->cli_driver->print_left("generated keys begin");
-  CryptoPP::SecByteBlock shared_key = this->crypto_driver->DH_generate_shared_key(dh_obj, private_value, public_value);
+  CryptoPP::SecByteBlock shared_key = this->crypto_driver->DH_generate_shared_key(dh_obj, private_value, server_to_user_pub_msg.server_public_value);
   CryptoPP::SecByteBlock aes_key = this->crypto_driver->AES_generate_key(shared_key);
   CryptoPP::SecByteBlock hmac_key = this->crypto_driver->HMAC_generate_key(shared_key);
   this->cli_driver->print_left("generated keys end");
@@ -177,7 +177,7 @@ UserClient::HandleUserKeyExchange() {
   }
 
   // Generate DH shared key + AES and HMAC keys
-  CryptoPP::SecByteBlock shared_key = this->crypto_driver->DH_generate_shared_key(dh_obj, private_value, public_value);
+  CryptoPP::SecByteBlock shared_key = this->crypto_driver->DH_generate_shared_key(dh_obj, private_value, other_user_msg.public_value);
   CryptoPP::SecByteBlock aes_key = this->crypto_driver->AES_generate_key(shared_key);
   CryptoPP::SecByteBlock hmac_key = this->crypto_driver->HMAC_generate_key(shared_key);
 
@@ -257,24 +257,24 @@ void UserClient::DoLoginOrRegister(std::string input) {
   this->cli_driver->print_left("generated and send hspw end");
 
   // If registering, receive a PRG seed from server
-  // ony do if registering
-  this->cli_driver->print_left("receive prg seed from server begin");
   ServerToUser_PRGSeed_Message prg_seed_msg;
-  auto prg_seed_msg_data = this->network_driver->read();
-  auto [decrypted_prg_seed_data, seed_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, prg_seed_msg_data);
-  this->cli_driver->print_warning("user 6");
-  if (!seed_decrypted) {
-    throw std::runtime_error("Could not decrypt data");
+  if (input == "register") {
+    this->cli_driver->print_left("receive prg seed from server begin");
+    auto prg_seed_msg_data = this->network_driver->read();
+    auto [decrypted_prg_seed_data, seed_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, prg_seed_msg_data);
+    if (!seed_decrypted) {
+      throw std::runtime_error("Could not decrypt data");
+    }
+    prg_seed_msg.deserialize(decrypted_prg_seed_data);
+    this->prg_seed = prg_seed_msg.seed;
+    this->cli_driver->print_left("receive prg seed from server end");
   }
-  prg_seed_msg.deserialize(decrypted_prg_seed_data);
-  this->prg_seed = prg_seed_msg.seed;
-  this->cli_driver->print_left("receive prg seed from server end");
-
   // Generate and send a 2FA response
   this->cli_driver->print_left("generated and send 2fa response begin");
-  ServerToUser_PRGSeed_Message prg_2fa_seed_msg;
-  prg_seed_msg.seed = this->prg_seed;
-  std::vector<unsigned char> prg_seed_data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &prg_2fa_seed_msg);
+  UserToServer_PRGValue_Message prg_2fa_msg;
+  prg_2fa_msg.value = this->crypto_driver->prg(this->prg_seed, integer_to_byteblock(this->crypto_driver->nowish()), PRG_SIZE);
+  prg_seed_msg.seed = this->prg_seed; //line I am sus about
+  std::vector<unsigned char> prg_seed_data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &prg_2fa_msg);
   this->network_driver->send(prg_seed_data);
   this->cli_driver->print_left("generate and send 2fa response end");
 
@@ -283,7 +283,7 @@ void UserClient::DoLoginOrRegister(std::string input) {
   auto [rsa_private_key, rsa_public_key] = this->crypto_driver->RSA_generate_keys();
   this->RSA_signing_key = rsa_private_key;
   UserToServer_VerificationKey_Message vk_msg;
-  vk_msg.verification_key = rsa_private_key;
+  vk_msg.verification_key = rsa_public_key;
   std::vector<unsigned char> vk_msg_data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &vk_msg);
   this->network_driver->send(vk_msg_data);
   this->cli_driver->print_left("generate rsa pair end");
@@ -293,7 +293,6 @@ void UserClient::DoLoginOrRegister(std::string input) {
   ServerToUser_IssuedCertificate_Message issued_cert_msg;
   auto cert_msg_data = this->network_driver->read();
   auto [decrypted_cert_msg_data, cert_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, cert_msg_data);
-  this->cli_driver->print_warning("3");
   if (!cert_decrypted) {
     throw std::runtime_error("Could not decrypt data");
   }

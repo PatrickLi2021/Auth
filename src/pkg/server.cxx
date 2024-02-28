@@ -133,15 +133,18 @@ bool ServerClient::HandleConnection(
         throw std::runtime_error("User to server ID prompt message could not be decrypted");
     }
     msg.deserialize(decrypted_msg_data);
-    
+    this->cli_driver->print_left("deserialized the ID prompt message data");
     if (msg.new_user) {
       this->cli_driver->print_left("Registering");
       HandleRegister(network_driver, crypto_driver, msg.id, key_pair);
+      this->cli_driver->print_left("Finished registsering!");
     } else {
       this->cli_driver->print_left("Logging in");
       HandleLogin(network_driver, crypto_driver, msg.id, key_pair);
     }
+    this->cli_driver->print_left("after registering, begin disconnect");
     network_driver->disconnect();
+    this->cli_driver->print_left("after registering, end disconnect");
     return true;
   } catch (...) {
     this->cli_driver->print_warning("Connection threw an error");
@@ -169,15 +172,16 @@ ServerClient::HandleKeyExchange(std::shared_ptr<NetworkDriver> network_driver,
   
   ServerToUser_DHPublicValue_Message dh_pub_val_msg;
   dh_pub_val_msg.user_public_value = msg.public_value;
-  auto [dh_obj, public_value, private_value] = crypto_driver->DH_initialize();
+  auto [dh_obj, private_value, public_value] = crypto_driver->DH_initialize();
   dh_pub_val_msg.server_public_value = public_value;
+  
   std::string signature = crypto_driver->RSA_sign(this->RSA_signing_key, concat_byteblocks(dh_pub_val_msg.server_public_value, dh_pub_val_msg.user_public_value));
   dh_pub_val_msg.server_signature = signature;
   std::vector<unsigned char> dh_pub_val_msg_data;
   dh_pub_val_msg.serialize(dh_pub_val_msg_data);
   network_driver->send(dh_pub_val_msg_data);
 
-  auto shared_key = crypto_driver->DH_generate_shared_key(dh_obj, public_value, private_value);
+  auto shared_key = crypto_driver->DH_generate_shared_key(dh_obj, private_value, dh_pub_val_msg.user_public_value);
   auto aes_key = crypto_driver->AES_generate_key(shared_key);
   auto hmac_key = crypto_driver->HMAC_generate_key(shared_key);
   return std::make_pair(aes_key, hmac_key);
@@ -228,7 +232,6 @@ void ServerClient::HandleLogin(
       break;
     }
   }
-  this->cli_driver->print_warning("3");
   if (!found_pepper) {
     network_driver->disconnect();
     throw std::runtime_error("A matching pepper was not found");
@@ -378,7 +381,7 @@ void ServerClient::HandleRegister(
     network_driver->disconnect();
     throw std::runtime_error("Message could not be decrypted");
   }
-  vk_msg.deserialize(vk_msg_data);
+  vk_msg.deserialize(decrypted_vk_msg_data);
   this->cli_driver->print_left("Receive user's verification key");
   
   // Sign and create certificate
