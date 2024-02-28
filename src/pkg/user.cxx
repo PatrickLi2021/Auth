@@ -243,6 +243,7 @@ void UserClient::DoLoginOrRegister(std::string input) {
   // Decrypt and verify (we have to explicitly call deserialize on the resulting first element of decrypt_and_verify but we do NOT have to explicity call serialize after calling encrypt_and_tag)
   auto [decrypted_salt_msg_data, salt_msg_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, salt_msg_data);
   if (!salt_msg_decrypted) {
+    this->network_driver->disconnect();
     throw std::runtime_error("Could not decrypt data");
   }
   salt_msg.deserialize(decrypted_salt_msg_data);
@@ -257,12 +258,13 @@ void UserClient::DoLoginOrRegister(std::string input) {
   this->cli_driver->print_left("generated and send hspw end");
 
   // If registering, receive a PRG seed from server
-  ServerToUser_PRGSeed_Message prg_seed_msg;
   if (input == "register") {
+    ServerToUser_PRGSeed_Message prg_seed_msg;
     this->cli_driver->print_left("receive prg seed from server begin");
     auto prg_seed_msg_data = this->network_driver->read();
     auto [decrypted_prg_seed_data, seed_decrypted] = this->crypto_driver->decrypt_and_verify(aes_key, hmac_key, prg_seed_msg_data);
     if (!seed_decrypted) {
+      this->network_driver->disconnect();
       throw std::runtime_error("Could not decrypt data");
     }
     prg_seed_msg.deserialize(decrypted_prg_seed_data);
@@ -273,7 +275,6 @@ void UserClient::DoLoginOrRegister(std::string input) {
   this->cli_driver->print_left("generated and send 2fa response begin");
   UserToServer_PRGValue_Message prg_2fa_msg;
   prg_2fa_msg.value = this->crypto_driver->prg(this->prg_seed, integer_to_byteblock(this->crypto_driver->nowish()), PRG_SIZE);
-  prg_seed_msg.seed = this->prg_seed; //line I am sus about
   std::vector<unsigned char> prg_seed_data = this->crypto_driver->encrypt_and_tag(aes_key, hmac_key, &prg_2fa_msg);
   this->network_driver->send(prg_seed_data);
   this->cli_driver->print_left("generate and send 2fa response end");
@@ -307,6 +308,7 @@ void UserClient::DoLoginOrRegister(std::string input) {
   SaveRSAPublicKey(this->user_config.user_verification_key_path, this->RSA_verification_key);
   SavePRGSeed(this->user_config.user_prg_seed_path, this->prg_seed);
   SaveCertificate(this->user_config.user_certificate_path, this->certificate);
+  this->network_driver->disconnect();
   this->cli_driver->print_left("receive and save keys, cert, seed end");
 }
 

@@ -204,7 +204,10 @@ void ServerClient::HandleLogin(
   
   // Find user
   UserRow user = this->db_driver->find_user(id);
-  std::string user_id = user.user_id;
+  if (user.user_id == "") {
+    network_driver->disconnect();
+    throw std::runtime_error("Could not find user");
+  }
   
   // Send salt to user
   ServerToUser_Salt_Message salt_msg;
@@ -221,15 +224,15 @@ void ServerClient::HandleLogin(
     network_driver->disconnect();
     throw std::runtime_error("User to server hashed and salted password message could not be decrypted");
   }
+  hash_and_salted_pwd_msg.deserialize(decrypted_hspw_data);
   this->cli_driver->print_left("Receive hash of salted password");
   
   // Try all possible peppers
   this->cli_driver->print_left("Trying all possible peppers in login");
   bool found_pepper = false;
   for (int i = 0; i < 256; ++i) {
-    // cast i into char, then make string struct using the char
-    auto string_i = std::to_string((char)((uint8_t)i));
-    std::string hash_output = crypto_driver->hash(hash_and_salted_pwd_msg.hspw + string_i);
+    auto pepper_char = (char)((uint8_t)i);
+    std::string hash_output = crypto_driver->hash(hash_and_salted_pwd_msg.hspw + pepper_char);
     if (hash_output == user.password_hash) {
       found_pepper = true;
       break;
@@ -241,6 +244,7 @@ void ServerClient::HandleLogin(
     throw std::runtime_error("A matching pepper was not found");
   }
   this->cli_driver->print_left("Receiving 2FA response in login begin");
+  
   // Receive 2FA response
   UserToServer_PRGValue_Message prg_msg;
   auto two_fa_data = network_driver->read();
@@ -250,7 +254,7 @@ void ServerClient::HandleLogin(
     throw std::runtime_error("2FA response could not be decrypted successfully");
   }
   prg_msg.deserialize(decrypted_2fa_msg_data);
-  this->cli_driver->print_warning("Receiving 2FA response in login end");
+  this->cli_driver->print_left("Receiving 2FA response in login end");
   
   // Check if response was generated in last 60 seconds
   this->cli_driver->print_left("Checking if response was generated in last 60 seconds begin"); 
@@ -270,6 +274,7 @@ void ServerClient::HandleLogin(
   }
   
   this->cli_driver->print_left("Receive user's verification key in login begin"); 
+  
   // Receive user's verification key
   UserToServer_VerificationKey_Message vk_msg;
   auto vk_msg_data = network_driver->read();
@@ -284,8 +289,8 @@ void ServerClient::HandleLogin(
   
   // Sign and create certificate
   this->cli_driver->print_left("Sign and create certificate in login begin"); 
-  auto [private_key, public_key] = crypto_driver->RSA_generate_keys();
-  std::string server_sig = crypto_driver->RSA_sign(private_key, concat_string_and_rsakey(user.user_id, vk_msg.verification_key));
+  // auto [private_key, public_key] = crypto_driver->RSA_generate_keys();
+  std::string server_sig = crypto_driver->RSA_sign(this->RSA_signing_key, concat_string_and_rsakey(user.user_id, vk_msg.verification_key));
   this->cli_driver->print_left("Sign and create certificate in login end"); 
 
   // Send certificate back to user
@@ -295,8 +300,8 @@ void ServerClient::HandleLogin(
   certificate.id = user.user_id;
   certificate.verification_key = vk_msg.verification_key;
   certificate.server_signature = server_sig;
-  std::vector<unsigned char> cert_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &issued_cert_msg);
   issued_cert_msg.certificate = certificate;
+  std::vector<unsigned char> cert_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &issued_cert_msg);
   network_driver->send(cert_data);
   this->cli_driver->print_warning("Sent certificate back to user in login end");
 }
