@@ -118,33 +118,21 @@ void ServerClient::ListenForConnections(int port) {
 bool ServerClient::HandleConnection(
     std::shared_ptr<NetworkDriver> network_driver,
     std::shared_ptr<CryptoDriver> crypto_driver) {
-  this->cli_driver->print_left("inside handle connection");
   try {
     UserToServer_IDPrompt_Message msg;
-    this->cli_driver->print_left("right before handleKeyExchange");
     auto key_pair = HandleKeyExchange(network_driver, crypto_driver);
-    this->cli_driver->print_left("After handlekeyexchange");
     auto id_prompt_msg_data = network_driver->read();
-    this->cli_driver->print_left("After read");
     auto [decrypted_msg_data, decrypted] = crypto_driver->decrypt_and_verify(key_pair.first, key_pair.second, id_prompt_msg_data);
-    this->cli_driver->print_left("handled key exchange");
     if (!decrypted) {
         network_driver->disconnect();
         throw std::runtime_error("User to server ID prompt message could not be decrypted");
     }
     msg.deserialize(decrypted_msg_data);
-    this->cli_driver->print_left("deserialized the ID prompt message data");
     if (msg.new_user) {
-      this->cli_driver->print_left("Registering");
       HandleRegister(network_driver, crypto_driver, msg.id, key_pair);
-      this->cli_driver->print_left("Finished registering!");
     } else {
-      this->cli_driver->print_left("Logging in");
       HandleLogin(network_driver, crypto_driver, msg.id, key_pair);
     }
-    this->cli_driver->print_left("after registering, begin disconnect");
-
-    this->cli_driver->print_left("after registering, end disconnect");
     return true;
   } catch (...) {
     this->cli_driver->print_warning("Connection threw an error");
@@ -219,16 +207,13 @@ void ServerClient::HandleLogin(
   UserToServer_HashedAndSaltedPassword_Message hash_and_salted_pwd_msg;
   auto received_data = network_driver->read();
   auto [decrypted_hspw_data, hspw_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, received_data);
-  this->cli_driver->print_left("right here");
   if (!hspw_decrypted) {
     network_driver->disconnect();
     throw std::runtime_error("User to server hashed and salted password message could not be decrypted");
   }
   hash_and_salted_pwd_msg.deserialize(decrypted_hspw_data);
-  this->cli_driver->print_left("Receive hash of salted password");
   
   // Try all possible peppers
-  this->cli_driver->print_left("Trying all possible peppers in login");
   bool found_pepper = false;
   for (int i = 0; i < 256; ++i) {
     auto pepper_char = (char)((uint8_t)i);
@@ -238,12 +223,10 @@ void ServerClient::HandleLogin(
       break;
     }
   }
-  this->cli_driver->print_left("Finished trying all possible peppers");
   if (!found_pepper) {
     network_driver->disconnect();
     throw std::runtime_error("A matching pepper was not found");
   }
-  this->cli_driver->print_left("Receiving 2FA response in login begin");
   
   // Receive 2FA response
   UserToServer_PRGValue_Message prg_msg;
@@ -254,10 +237,8 @@ void ServerClient::HandleLogin(
     throw std::runtime_error("2FA response could not be decrypted successfully");
   }
   prg_msg.deserialize(decrypted_2fa_msg_data);
-  this->cli_driver->print_left("Receiving 2FA response in login end");
   
   // Check if response was generated in last 60 seconds
-  this->cli_driver->print_left("Checking if response was generated in last 60 seconds begin"); 
   bool in_time = false;
   CryptoPP::Integer current_time = crypto_driver->nowish();
   for (int i = 0; i < 60; ++i) {
@@ -266,14 +247,12 @@ void ServerClient::HandleLogin(
       break;
     }
     current_time -= i;
-    }
-  this->cli_driver->print_left("Checking if response was generated in last 60 seconds end");   
+    } 
   if (!in_time) {
     network_driver->disconnect();
     throw std::runtime_error("Response was not sent in time");
   }
   
-  this->cli_driver->print_left("Receive user's verification key in login begin"); 
   
   // Receive user's verification key
   UserToServer_VerificationKey_Message vk_msg;
@@ -285,16 +264,12 @@ void ServerClient::HandleLogin(
     throw std::runtime_error("Message could not be decrypted");
   }
   vk_msg.deserialize(decrypted_data);
-  this->cli_driver->print_left("Receive user's verification key in login end"); 
   
   // Sign and create certificate
-  this->cli_driver->print_left("Sign and create certificate in login begin"); 
   // auto [private_key, public_key] = crypto_driver->RSA_generate_keys();
   std::string server_sig = crypto_driver->RSA_sign(this->RSA_signing_key, concat_string_and_rsakey(user.user_id, vk_msg.verification_key));
-  this->cli_driver->print_left("Sign and create certificate in login end"); 
 
   // Send certificate back to user
-  this->cli_driver->print_left("Send certificate back to user in login begin"); 
   ServerToUser_IssuedCertificate_Message issued_cert_msg;
   Certificate_Message certificate;
   certificate.id = user.user_id;
@@ -322,8 +297,8 @@ void ServerClient::HandleRegister(
     std::shared_ptr<NetworkDriver> network_driver,
     std::shared_ptr<CryptoDriver> crypto_driver, std::string id,
     std::pair<CryptoPP::SecByteBlock, CryptoPP::SecByteBlock> keys) {
+  
   // Confirm user is not in database
-  cli_driver->print_left("Hello from handleregister");
   UserRow user = this->db_driver->find_user(id);
   if (!(user.user_id == "")) { 
     network_driver->disconnect();
@@ -339,25 +314,24 @@ void ServerClient::HandleRegister(
   salt_msg.salt = byteblock_to_string(salt);
   std::vector<unsigned char> send_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &salt_msg);
   network_driver->send(send_data);
-  this->cli_driver->print_left("Generated and sent salt");
   new_user.password_salt = byteblock_to_string(salt);
   
   // Receive hash of salted password
   UserToServer_HashedAndSaltedPassword_Message hash_and_salted_pwd;
   auto hspw_data = network_driver->read();
   auto [decrypted_hspw_data, hspw_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, hspw_data);
-  this->cli_driver->print_left("6");
+  
   if (!hspw_decrypted) {
     network_driver->disconnect();
     throw std::runtime_error("Message could not be decrypted");
   }
+  
   hash_and_salted_pwd.deserialize(decrypted_hspw_data);
 
   // Generate pepper and stored second hash
   CryptoPP::SecByteBlock pepper = crypto_driver->png(PEPPER_SIZE);
   std::string hash_response = crypto_driver->hash(hash_and_salted_pwd.hspw + byteblock_to_string(pepper));
   new_user.password_hash = hash_response;
-  this->cli_driver->print_left("Generate pepper and stored second hash");
 
   // Generates and sends PRG seed to user
   ServerToUser_PRGSeed_Message prg_seed_msg;
@@ -366,19 +340,16 @@ void ServerClient::HandleRegister(
   std::vector<unsigned char> prg_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &prg_seed_msg);
   network_driver->send(prg_data);
   new_user.prg_seed = byteblock_to_string(user_seed);
-  this->cli_driver->print_left("Generated and send PRG seed to user");
   
   // Receive 2FA response
   UserToServer_PRGValue_Message prg_msg;
   auto prg_msg_data = network_driver->read();
   auto [decrypted_prg_msg_data, prg_msg_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, prg_msg_data);
-  this->cli_driver->print_left("7");
   if (!prg_msg_decrypted) {
     network_driver->disconnect();
     throw std::runtime_error("Message could not be decrypted");
   }
   prg_msg.deserialize(decrypted_prg_msg_data);
-  this->cli_driver->print_left("Receive 2FA response");
 
   // Check to see if it was generated in the last 60 seconds
   bool in_time = false;
@@ -388,7 +359,6 @@ void ServerClient::HandleRegister(
       break;
     }
   }
-  this->cli_driver->print_left("8");
   if (!in_time) {
     network_driver->disconnect();
     throw std::runtime_error("Response was not generated in time");
@@ -397,18 +367,15 @@ void ServerClient::HandleRegister(
   UserToServer_VerificationKey_Message vk_msg;
   auto vk_msg_data = network_driver->read();
   auto [decrypted_vk_msg_data, vk_msg_decrypted] = crypto_driver->decrypt_and_verify(keys.first, keys.second, vk_msg_data);
-  this->cli_driver->print_left("9");
   if (!vk_msg_decrypted) {
     network_driver->disconnect();
     throw std::runtime_error("Message could not be decrypted");
   }
   vk_msg.deserialize(decrypted_vk_msg_data);
-  this->cli_driver->print_left("Receive user's verification key");
   
   // Sign and create certificate
   auto [private_key, public_key] = crypto_driver->RSA_generate_keys();
   std::string server_sig = crypto_driver->RSA_sign(private_key, concat_string_and_rsakey(new_user.user_id, vk_msg.verification_key));
-  this->cli_driver->print_left("Signed and created certificate");
 
   // Send certificate back to user
   ServerToUser_IssuedCertificate_Message issued_cert_msg;
@@ -419,7 +386,6 @@ void ServerClient::HandleRegister(
   std::vector<unsigned char> cert_msg_data = crypto_driver->encrypt_and_tag(keys.first, keys.second, &issued_cert_msg);
   issued_cert_msg.certificate = certificate;
   network_driver->send(cert_msg_data);
-  this->cli_driver->print_left("Sent certificate back to user");  
   
   this->db_driver->insert_user(new_user);
 }
