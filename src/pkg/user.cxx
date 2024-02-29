@@ -154,6 +154,9 @@ UserClient::HandleUserKeyExchange() {
   dh_pub_val_msg.certificate = this->certificate;
   dh_pub_val_msg.user_signature = signature;
   this->cli_driver->print_left("sent keypair to other user");
+  std::vector<unsigned char> dh_pub_val_msg_data;
+  dh_pub_val_msg.serialize(dh_pub_val_msg_data);
+  this->network_driver->send(dh_pub_val_msg_data);
 
   // Receive public value from other user
   UserToUser_DHPublicValue_Message other_user_msg;
