@@ -253,7 +253,6 @@ void ServerClient::HandleLogin(
     throw std::runtime_error("Response was not sent in time");
   }
   
-  
   // Receive user's verification key
   UserToServer_VerificationKey_Message vk_msg;
   auto vk_msg_data = network_driver->read();
@@ -325,7 +324,7 @@ void ServerClient::HandleRegister(
     network_driver->disconnect();
     throw std::runtime_error("Message could not be decrypted");
   }
-  
+
   hash_and_salted_pwd.deserialize(decrypted_hspw_data);
 
   // Generate pepper and stored second hash
